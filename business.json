@@ -1,0 +1,24 @@
+{
+  "name": "Northside Auto & Home Service",
+  "timezone": "America/Chicago",
+  "bays": 2,
+  "min_notice_minutes": 60,
+  "booking_window_days": 45,
+  "max_upcoming_per_phone": 3,
+  "hours": {
+    "mon": ["08:00", "17:00"],
+    "tue": ["08:00", "17:00"],
+    "wed": ["08:00", "17:00"],
+    "thu": ["08:00", "17:00"],
+    "fri": ["08:00", "17:00"],
+    "sat": ["09:00", "13:00"],
+    "sun": null
+  },
+  "services": [
+    {"key": "oil_change", "name": "Oil change", "minutes": 30, "description": "Standard oil and filter change"},
+    {"key": "tire_rotation", "name": "Tire rotation", "minutes": 30, "description": "Rotate and check tire pressure"},
+    {"key": "brake_inspection", "name": "Brake inspection", "minutes": 60, "description": "Inspect pads, rotors and fluid"},
+    {"key": "diagnostic", "name": "Diagnostic check", "minutes": 60, "description": "Check engine light or unknown problem"},
+    {"key": "ac_service", "name": "A/C service", "minutes": 90, "description": "A/C performance check and recharge"}
+  ]
+}

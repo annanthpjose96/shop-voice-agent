@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     twilio_auth_token: str = ""
     public_host: str = "localhost:8000"
     validate_twilio_signature: bool = True
+    enable_test_ui: bool = False  # browser voice test at /test (development only)
     human_transfer_number: str = ""
 
     tts_provider: str = "Google"

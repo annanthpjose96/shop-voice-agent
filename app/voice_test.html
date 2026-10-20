@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice test - __BUSINESS__</title>
+<style>
+  :root { --bg:#f6f8fb; --card:#fff; --ink:#1b2430; --muted:#5d6b7c; --line:#d5dde7; --navy:#1f3a5f; --teal:#2e7d6b; --you:#e8f1fb; --agent:#e7f4ef; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#12161c; --card:#1a2029; --ink:#e6ebf2; --muted:#9aa7b8; --line:#2c3644; --navy:#6fa0d8; --teal:#58b89f; --you:#1d2b3d; --agent:#173128; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { margin: 0 0 4px; font-size: 24px; color: var(--navy); }
+  .sub { margin: 0 0 18px; color: var(--muted); }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px 16px; margin-bottom:14px; }
+  .row { display:flex; flex-wrap:wrap; gap:12px; align-items:center; }
+  label { font-size:14px; color:var(--muted); display:flex; gap:6px; align-items:center; }
+  select { font:inherit; padding:4px 6px; border-radius:6px; border:1px solid var(--line); background:var(--card); color:var(--ink); }
+  button { font:inherit; font-weight:600; padding:9px 18px; border-radius:8px; border:0; cursor:pointer; background:var(--teal); color:#fff; }
+  button#end { background:#b23a2e; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  .pill { margin-left:auto; padding:3px 12px; border-radius:999px; border:1px solid var(--line); font-size:13px; color:var(--muted); }
+  .pill.live { color:var(--teal); border-color:var(--teal); }
+  #log { min-height:240px; max-height:52vh; overflow-y:auto; display:flex; flex-direction:column; gap:8px; }
+  .line { padding:8px 12px; border-radius:10px; max-width:88%; }
+  .line.you { background:var(--you); align-self:flex-end; }
+  .line.agent { background:var(--agent); align-self:flex-start; }
+  .line.sys { align-self:center; color:var(--muted); font-size:13px; padding:2px 8px; }
+  .note { font-size:13px; color:var(--muted); margin:0; }
+  .empty { color:var(--muted); font-size:14px; text-align:center; margin:auto; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Voice test</h1>
+  <p class="sub">Talk to the agent through your browser. Uses your microphone and speakers. No phone or Twilio needed.</p>
+
+  <div class="card">
+    <div class="row">
+      <button id="start">Start call</button>
+      <button id="end" disabled>End call</button>
+      <label>Accent
+        <select id="lang">
+          <option value="en-IN">English (India)</option>
+          <option value="en-US">English (US)</option>
+          <option value="en-GB">English (UK)</option>
+        </select>
+      </label>
+      <label>Voice <select id="voice" style="max-width:240px"></select></label>
+      <label><input type="checkbox" id="barge"> Allow interrupting (use headphones)</label>
+      <span id="status" class="pill">Idle</span>
+    </div>
+  </div>
+
+  <div class="card"><div id="log"><div class="empty" id="empty">Press Start call, allow the microphone, then speak.</div></div></div>
+
+  <p class="note">Works in Chrome and Edge. Speech recognition uses your browser's online service. This tests the agent's conversation, tools and database by voice; it does not test Twilio's phone audio or latency.</p>
+</main>
+
+<script>
+const GREETING = __GREETING__;
+const $ = id => document.getElementById(id);
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+let ws = null, rec = null, active = false, listening = false;
+let buf = '', pending = 0, lastSeen = true, dropUntil = 0, gen = 0;
+let spokenDone = '', curUtt = null, curIdx = 0, agentSpan = null;
+
+function setStatus(text, live) { const s = $('status'); s.textContent = text; s.className = 'pill' + (live ? ' live' : ''); }
+
+function logLine(who, text) {
+  const e = $('empty'); if (e) e.remove();
+  const d = document.createElement('div'); d.className = 'line ' + who;
+  const span = document.createElement('span'); span.textContent = text;
+  if (who !== 'sys') { const b = document.createElement('b'); b.textContent = (who === 'you' ? 'You' : 'Agent') + ': '; d.appendChild(b); }
+  d.appendChild(span); $('log').appendChild(d); d.scrollIntoView({ block: 'end' });
+  return span;
+}
+
+function voiceScore(v, lang) {
+  return (/natural/i.test(v.name) ? 3 : 0) + (/online/i.test(v.name) ? 2 : 0) + (/google/i.test(v.name) ? 1 : 0) + (v.lang === lang ? 1 : 0);
+}
+
+function loadVoices() {
+  const lang = $('lang').value, sel = $('voice');
+  const list = speechSynthesis.getVoices().filter(v => v.lang.startsWith(lang.slice(0, 2)))
+    .sort((a, b) => voiceScore(b, lang) - voiceScore(a, lang));
+  let saved = ''; try { saved = localStorage.getItem('voiceName') || ''; } catch (_) {}
+  sel.innerHTML = '';
+  list.forEach(v => { const o = document.createElement('option'); o.value = v.name; o.textContent = v.name + ' (' + v.lang + ')'; sel.appendChild(o); });
+  if (saved && list.some(v => v.name === saved)) sel.value = saved;
+  if (!list.length) { const o = document.createElement('option'); o.textContent = 'Default voice'; sel.appendChild(o); }
+}
+
+function pickVoice(lang) {
+  const v = speechSynthesis.getVoices();
+  return v.find(x => x.name === $('voice').value) || v.find(x => x.lang === lang) || v.find(x => x.lang.startsWith(lang.slice(0, 2))) || null;
+}
+
+function speak(text) {
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = $('lang').value;
+  const v = pickVoice(u.lang); if (v) u.voice = v;
+  const g = gen;
+  pending++; setStatus('Speaking', true);
+  if (!$('barge').checked) stopRec();          // half-duplex: don't hear ourselves
+  u.onstart = () => { curUtt = u; curIdx = 0; };
+  u.onboundary = e => { if (curUtt === u) curIdx = e.charIndex; };
+  const done = () => {
+    if (g !== gen) return;                      // cancelled by an interruption
+    if (curUtt === u) { spokenDone += text + ' '; curUtt = null; }
+    pending = Math.max(0, pending - 1); maybeListen();
+  };
+  u.onend = done; u.onerror = done;
+  speechSynthesis.speak(u);
+}
+
+function flush(final) {
+  let m;
+  while ((m = buf.match(/^([\s\S]*?[.!?])\s+/))) { speak(m[1]); buf = buf.slice(m[0].length); }
+  if (final && buf.trim()) { speak(buf.trim()); buf = ''; }
+}
+
+function cancelSpeech() { gen++; speechSynthesis.cancel(); pending = 0; buf = ''; curUtt = null; }
+
+function maybeListen() {
+  if (!active) return;
+  if (pending === 0 && lastSeen) { startRec(); setStatus('Listening', true); }
+}
+
+function startRec() {
+  if (!SR || !active || listening) return;
+  rec = new SR(); rec.lang = $('lang').value; rec.continuous = false; rec.interimResults = false;
+  rec.onstart = () => { listening = true; };
+  rec.onend = () => {
+    listening = false;
+    if (active && ((pending === 0 && lastSeen) || $('barge').checked)) setTimeout(startRec, 150);
+  };
+  rec.onerror = e => {
+    if (e.error === 'not-allowed' || e.error === 'service-not-allowed') { logLine('sys', 'Microphone is blocked. Allow it in the address bar and start again.'); endCall(true); }
+  };
+  rec.onresult = e => { const t = e.results[e.results.length - 1][0].transcript.trim(); if (t) onUser(t); };
+  try { rec.start(); } catch (_) {}
+}
+
+function stopRec() { if (rec) { try { rec.abort(); } catch (_) {} } listening = false; }
+
+function onUser(text) {
+  if (!ws || ws.readyState !== 1) return;
+  if (pending > 0 || curUtt) {                  // caller talked over the agent
+    const spoken = (spokenDone + (curUtt ? curUtt.text.slice(0, curIdx) : '')).trim();
+    cancelSpeech();
+    ws.send(JSON.stringify({ type: 'interrupt', utteranceUntilInterrupt: spoken }));
+    dropUntil = performance.now() + 400;        // ignore stray tokens from the cancelled reply
+  }
+  logLine('you', text);
+  agentSpan = null; buf = ''; lastSeen = false;
+  setStatus('Thinking', true); stopRec();
+  ws.send(JSON.stringify({ type: 'prompt', voicePrompt: text, lang: $('lang').value, last: true }));
+}
+
+function endCall(cancelAudio) {
+  active = false; stopRec();
+  if (cancelAudio) cancelSpeech();
+  if (ws) { try { ws.close(); } catch (_) {} ws = null; }
+  $('start').disabled = false; $('end').disabled = true; setStatus('Idle', false);
+}
+
+$('start').onclick = () => {
+  if (!SR) { alert('This browser has no speech recognition. Please use Chrome or Edge.'); return; }
+  $('log').innerHTML = ''; spokenDone = ''; agentSpan = null; buf = ''; pending = 0; lastSeen = true; gen++;
+  active = true; $('start').disabled = true; $('end').disabled = false; setStatus('Connecting', false);
+  ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws-test');
+  ws.onopen = () => {
+    ws.send(JSON.stringify({ type: 'setup', callSid: 'browser-' + Math.random().toString(36).slice(2, 8), from: '+15551234567' }));
+    logLine('agent', GREETING); buf = GREETING; flush(true);
+  };
+  ws.onmessage = ev => {
+    const m = JSON.parse(ev.data);
+    if (m.type === 'text') {
+      if (performance.now() < dropUntil) return;
+      if (m.token) {
+        if (!agentSpan) { spokenDone = ''; agentSpan = logLine('agent', ''); }
+        agentSpan.textContent += m.token; buf += m.token; flush(false);
+      }
+      if (m.last) { flush(true); agentSpan = null; lastSeen = true; maybeListen(); }
+    } else if (m.type === 'end') {
+      let a = {}; try { a = JSON.parse(m.handoffData || '{}'); } catch (_) {}
+      logLine('sys', 'Call ended (' + (a.action === 'transfer' ? 'would transfer to a person' : 'hang up') + ').');
+      endCall(false);
+    }
+  };
+  ws.onclose = () => { if (active) { logLine('sys', 'Disconnected from the server.'); endCall(true); } };
+  ws.onerror = () => logLine('sys', 'Could not reach the server. Is it running, and is ENABLE_TEST_UI=true?');
+};
+speechSynthesis.onvoiceschanged = loadVoices; loadVoices();
+$('lang').onchange = loadVoices;
+$('voice').onchange = () => {
+  try { localStorage.setItem('voiceName', $('voice').value); } catch (_) {}
+  if (!active) {                                  // preview the chosen voice
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance('Hi, thanks for calling. How can I help you today?');
+    u.lang = $('lang').value; const v = pickVoice(u.lang); if (v) u.voice = v;
+    speechSynthesis.speak(u);
+  }
+};
+$('end').onclick = () => { logLine('sys', 'You ended the call.'); endCall(true); };
+window.addEventListener('beforeunload', () => { try { speechSynthesis.cancel(); } catch (_) {} });
+</script>
+</body>
+</html>

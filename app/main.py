@@ -1,9 +1,12 @@
 import asyncio
+import html
 import json
 import logging
+from pathlib import Path
 from xml.sax.saxutils import quoteattr
 
 from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse
 from twilio.request_validator import RequestValidator
 
 from .agent import Agent
@@ -30,6 +33,13 @@ def _signature_ok(signature: str | None, url: str, params: dict) -> bool:
     return RequestValidator(settings.twilio_auth_token).validate(url, params, signature or "")
 
 
+def _greeting() -> str:
+    return (
+        f"Thanks for calling {business.name}. I'm the shop's virtual assistant, and this call may be "
+        "logged to help us improve. How can I help you today?"
+    )
+
+
 def _xml(body: str) -> Response:
     return Response(f'<?xml version="1.0" encoding="UTF-8"?><Response>{body}</Response>', media_type="text/xml")
 
@@ -44,10 +54,7 @@ async def voice(request: Request):
     params = dict(await request.form())
     if not _signature_ok(request.headers.get("X-Twilio-Signature"), f"https://{settings.public_host}/voice", params):
         return Response("forbidden", status_code=403)
-    greeting = (
-        f"Thanks for calling {business.name}. I'm the shop's virtual assistant, and this call may be "
-        "logged to help us improve. How can I help you today?"
-    )
+    greeting = _greeting()
     attrs = {
         "url": f"wss://{settings.public_host}/ws",
         "welcomeGreeting": greeting,
@@ -107,11 +114,34 @@ async def handle_turn(send, session: Session, text: str) -> None:
         await send({"type": "end", "handoffData": json.dumps(session.pending_end)})
 
 
+@app.get("/test")
+async def test_page():
+    """Browser voice test. Development only: enable with ENABLE_TEST_UI=true."""
+    if not settings.enable_test_ui:
+        return Response("Test page is disabled. Set ENABLE_TEST_UI=true in .env and restart.", status_code=404)
+    page = (Path(__file__).parent / "voice_test.html").read_text(encoding="utf-8")
+    page = page.replace("__GREETING__", json.dumps(_greeting()).replace("</", "<\\/"))
+    return HTMLResponse(page.replace("__BUSINESS__", html.escape(business.name)))
+
+
 @app.websocket("/ws")
 async def ws(websocket: WebSocket):
     if not _signature_ok(websocket.headers.get("X-Twilio-Signature"), f"wss://{settings.public_host}/ws", {}):
         await websocket.close(code=1008)
         return
+    await _serve_call(websocket)
+
+
+@app.websocket("/ws-test")
+async def ws_test(websocket: WebSocket):
+    """Same call logic as /ws, without Twilio's signature, for the browser test page only."""
+    if not settings.enable_test_ui:
+        await websocket.close(code=1008)
+        return
+    await _serve_call(websocket)
+
+
+async def _serve_call(websocket: WebSocket):
     await websocket.accept()
     session: Session | None = None
     task: asyncio.Task | None = None
